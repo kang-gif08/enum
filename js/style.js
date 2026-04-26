@@ -20,3 +20,20 @@ function janken(player) {
     document.getElementById("computer-hand").textContent = "康兌準：" + computer;
     document.getElementById("result").textContent = "結果：" + result;
 }
+let photoNumber = 0;
+
+const photos = [
+    "img/photo1.jpg",
+    "img/photo2.jpg",
+    "img/photo3.jpg"
+];
+
+function changePhoto() {
+    photoNumber++;
+
+    if (photoNumber >= photos.length) {
+        photoNumber = 0;
+    }
+
+    document.getElementById("main-photo").src = photos[photoNumber];
+}
