@@ -1,54 +1,34 @@
 package dto.search;
 
 /**
- * 検索結果をJSONで返すためのDTO
+ * 検索サジェスト情報を表すDTO
  */
 public class SearchDto {
 
-    private String type; // user / channel / message / history
-    private String targetId; // 遷移先ID
-    private String displayName; // 画面に表示する名前
-    private String detail; // 補足情報
+    private String type; // USER / CHANNEL / MESSAGE / HISTORY
+    private String word; // 一覧に表示する文字列
 
     public SearchDto() {
     }
 
-    public SearchDto(String type, String targetId, String displayName, String detail) {
+    public SearchDto(String type, String word) {
         this.type = type;
-        this.targetId = targetId;
-        this.displayName = displayName;
-        this.detail = detail;
+        this.word = word;
     }
 
     public String getType() {
         return type;
     }
 
-    public String getTargetId() {
-        return targetId;
-    }
-
-    public String getDisplayName() {
-        return displayName;
-    }
-
-    public String getDetail() {
-        return detail;
+    public String getWord() {
+        return word;
     }
 
     public void setType(String type) {
         this.type = type;
     }
 
-    public void setTargetId(String targetId) {
-        this.targetId = targetId;
-    }
-
-    public void setDisplayName(String displayName) {
-        this.displayName = displayName;
-    }
-
-    public void setDetail(String detail) {
-        this.detail = detail;
+    public void setWord(String word) {
+        this.word = word;
     }
 }
