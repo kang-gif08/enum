@@ -1,175 +1,83 @@
-package repository.search;
+package repository;
 
-import config.DatabaseConnector;
-// ↑ DBコネクションを取得するユーティリティクラス想定
-// ここはプロジェクトの実装に合わせて読み替えてください
-
-import dto.search.SearchDto;
-import entity.search.Search;
-
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
+import dto.SearchSuggestionDto;
+import java.sql.*;
 import java.util.ArrayList;
+import java.util.List;
 
 /**
- * SEARCHテーブルなどを操作するRepository。
- * - ユーザー検索(ログインユーザーが所属するワークスペース内)
- * - チャンネル検索(ログインユーザーが参加しているチャンネルのみ)
- * - メッセージ検索(参加しているチャンネル・DM内のみ)
- * - 検索履歴の登録・取得
+ * 検索機能用のリポジトリ
  */
 public class SearchRepository {
 
-    /**
-     * 検索履歴の登録。
-     * 
-     * @param search 登録する検索履歴エンティティ
-     * @return 登録結果のエンティティ
-     * @throws SQLException SQL例外
-     */
-    public Search insert(Search search) throws SQLException {
-        Connection conn = DatabaseConnector.getConnection();
+    private Connection conn;
 
-        // searchテーブルへ挿入
-        try (PreparedStatement ps = conn.prepareStatement(
-                "INSERT INTO search (search_id, user_id, search_text, created_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)",
-                new String[] { "search_id" })) {
-            ps.setString(1, search.getSearchId());
-            ps.setString(2, search.getUserId()); // entityのプロパティに合わせて
-            ps.setString(3, search.getSearchText());
-
-            int ret = ps.executeUpdate();
-            if (ret == 0) {
-                throw new SQLException("検索履歴の登録に失敗しました。");
-            }
-
-            try (ResultSet rs = ps.getGeneratedKeys()) {
-                if (rs.next()) {
-                    search.setSearchId(rs.getString(1));
-                }
-            }
-
-            return search;
-        }
+    public SearchRepository(Connection conn) {
+        this.conn = conn;
     }
 
     /**
-     * 自分が所属するワークスペース内のユーザーを検索。
-     * ログインユーザーが所属しているworkspace_idのみを対象とし、名前・表示名の部分一致。
+     * キーワードが入力されている場合：候補を最大10件返す。
+     * 優先順位はユーザー → チャンネル → メッセージ。
      *
-     * @param userId  ログインユーザーID
-     * @param keyword 検索文字
-     * @return 検索結果リスト（最大10件）
-     * @throws SQLException SQL例外
+     * @param keyword キーワード
+     * @param userId  現在のログインユーザーID
      */
-    public ArrayList<SearchDto> selectUser(String userId, String keyword) throws SQLException {
-        ArrayList<SearchDto> list = new ArrayList<>();
-        Connection conn = DatabaseConnector.getConnection();
+    public List<SearchSuggestionDto> findSuggestions(String keyword, String userId) throws SQLException {
 
-        String sql = "SELECT DISTINCT u.user_id, u.name, u.display_name " +
+        List<SearchSuggestionDto> list = new ArrayList<>();
+
+        String sql = "SELECT type, title, content FROM (" +
+
+        // 自分が参加しているワークスペースのユーザーを検索
+                "SELECT 'USER' AS type, u.user_name AS title, '' AS content, 1 AS priority " +
                 "FROM slick_user u " +
-                "JOIN workspace_user wu ON u.workspace_id = wu.workspace_id " +
-                "WHERE wu.user_id = ? " + // ログインユーザーが参加しているworkspace
-                "AND (u.name LIKE ? OR u.display_name LIKE ?) " +
-                "LIMIT 10";
+                "JOIN workspace_user wu ON u.id = wu.user_id " +
+                "JOIN workspace_user mywu ON mywu.workspace_id = wu.workspace_id AND mywu.user_id = ? " +
+                "WHERE u.user_name LIKE ? " +
 
-        try (PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, userId);
-            ps.setString(2, "%" + keyword + "%");
-            ps.setString(3, "%" + keyword + "%");
+                "UNION ALL " +
 
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    SearchDto dto = new SearchDto();
-                    dto.setType("user");
-                    dto.setTargetId(rs.getString("user_id"));
-                    // 画面表示用に display_name を優先。無ければ name でも可。
-                    dto.setDisplayName(rs.getString("display_name"));
-                    dto.setDetail(rs.getString("name"));
-                    list.add(dto);
-                }
-            }
-        }
-
-        return list;
-    }
-
-    /**
-     * 自分が参加しているチャンネルのみを検索。
-     *
-     * @param userId  ログインユーザーID
-     * @param keyword チャンネル名のキーワード
-     * @return 検索結果リスト（最大10件）
-     * @throws SQLException SQL例外
-     */
-    public ArrayList<SearchDto> selectChannel(String userId, String keyword) throws SQLException {
-        ArrayList<SearchDto> list = new ArrayList<>();
-        Connection conn = DatabaseConnector.getConnection();
-
-        String sql = "SELECT c.channel_id, c.name " +
+                // 自分が参加しているチャンネルを検索
+                "SELECT 'CHANNEL' AS type, c.channel_name AS title, '' AS content, 2 AS priority " +
                 "FROM channel c " +
-                "JOIN channel_user cu ON c.channel_id = cu.channel_id " +
-                "WHERE cu.user_id = ? " + // 参加チャンネルのみ
-                "AND c.name LIKE ? " +
-                "LIMIT 10";
+                "JOIN user_channel uc ON c.channel_id = uc.channel_id " +
+                "WHERE uc.user_id = ? " +
+                "  AND c.channel_name LIKE ? " +
 
-        try (PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, userId);
-            ps.setString(2, "%" + keyword + "%");
+                "UNION ALL " +
 
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    SearchDto dto = new SearchDto();
-                    dto.setType("channel");
-                    dto.setTargetId(rs.getString("channel_id"));
-                    dto.setDisplayName(rs.getString("name"));
-                    dto.setDetail("チャンネル");
-                    list.add(dto);
-                }
-            }
-        }
-
-        return list;
-    }
-
-    /**
-     * 自分が参加しているチャンネル内のメッセージを検索。
-     * メッセージに投稿者やチャンネル情報を付けたい場合はSELECT項目にJOINした列を追加します。
-     *
-     * @param userId  ログインユーザーID
-     * @param keyword メッセージ本文のキーワード
-     * @return 検索結果リスト（最大10件）
-     * @throws SQLException SQL例外
-     */
-    public ArrayList<SearchDto> selectChannelMessage(String userId, String keyword) throws SQLException {
-        ArrayList<SearchDto> list = new ArrayList<>();
-        Connection conn = DatabaseConnector.getConnection();
-
-        String sql = "SELECT m.message_id, m.message_text, c.name AS channel_name " +
+                // 自分が参加しているチャンネルのメッセージを検索
+                "SELECT 'MESSAGE' AS type, m.message_text AS title, m.message_text AS content, 3 AS priority " +
                 "FROM message m " +
-                "JOIN channel c         ON m.channel_id = c.channel_id " +
-                "JOIN channel_user cu   ON c.channel_id = cu.channel_id " +
-                "WHERE cu.user_id = ? " + // ログインユーザーが参加中
-                "AND m.message_text LIKE ? " +
-                "ORDER BY m.created_at DESC " + // 新しいメッセージを優先
-                "LIMIT 10";
+                "JOIN user_channel uc2 ON m.channel_id = uc2.channel_id " +
+                "WHERE uc2.user_id = ? " +
+                "  AND m.message_text LIKE ? " +
+
+                ") " +
+                "ORDER BY priority " +
+                "FETCH FIRST 10 ROWS ONLY";
 
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, userId);
-            ps.setString(2, "%" + keyword + "%");
 
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    SearchDto dto = new SearchDto();
-                    dto.setType("message");
-                    dto.setTargetId(rs.getString("message_id"));
-                    dto.setDisplayName(rs.getString("message_text"));
-                    // チャンネル名をdetailに付与
-                    dto.setDetail("チャンネル: " + rs.getString("channel_name"));
-                    list.add(dto);
-                }
+            String word = "%" + keyword + "%";
+            // 1つ目のJOIN句用
+            ps.setString(1, userId);
+            ps.setString(2, word);
+            // チャンネル用
+            ps.setString(3, userId);
+            ps.setString(4, word);
+            // メッセージ用
+            ps.setString(5, userId);
+            ps.setString(6, word);
+
+            ResultSet rs = ps.executeQuery();
+
+            while (rs.next()) {
+                list.add(new SearchSuggestionDto(
+                        rs.getString("type"),
+                        rs.getString("title"),
+                        rs.getString("content")));
             }
         }
 
@@ -177,76 +85,50 @@ public class SearchRepository {
     }
 
     /**
-     * 自分が参加しているDM内のメッセージを検索。
-     *
-     * @param userId  ログインユーザーID
-     * @param keyword DMメッセージのキーワード
-     * @return 検索結果リスト（最大10件）
-     * @throws SQLException SQL例外
-     */
-    public ArrayList<SearchDto> selectDmMessage(String userId, String keyword) throws SQLException {
-        ArrayList<SearchDto> list = new ArrayList<>();
-        Connection conn = DatabaseConnector.getConnection();
-
-        String sql = "SELECT dm_msg.dm_message_id, dm_msg.message_text " +
-                "FROM dm_message dm_msg " +
-                "JOIN dm_user du ON dm_msg.dm_id = du.dm_id " +
-                "WHERE du.user_id = ? " + // 参加DMのみ
-                "AND dm_msg.message_text LIKE ? " +
-                "ORDER BY dm_msg.created_at DESC " +
-                "LIMIT 10";
-
-        try (PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, userId);
-            ps.setString(2, "%" + keyword + "%");
-
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    SearchDto dto = new SearchDto();
-                    dto.setType("message");
-                    dto.setTargetId(rs.getString("dm_message_id"));
-                    dto.setDisplayName(rs.getString("message_text"));
-                    dto.setDetail("DMメッセージ");
-                    list.add(dto);
-                }
-            }
-        }
-
-        return list;
-    }
-
-    /**
-     * 検索履歴を取得（新しい順で最大10件）。
+     * 検索欄が空の場合：検索履歴を最大10件取得する。
      *
      * @param userId ログインユーザーID
-     * @return 検索履歴リスト
-     * @throws SQLException SQL例外
      */
-    public ArrayList<SearchDto> selectHistory(String userId) throws SQLException {
-        ArrayList<SearchDto> list = new ArrayList<>();
-        Connection conn = DatabaseConnector.getConnection();
+    public List<SearchSuggestionDto> findHistory(String userId) throws SQLException {
 
-        String sql = "SELECT search_id, search_text " +
+        List<SearchSuggestionDto> list = new ArrayList<>();
+
+        String sql = "SELECT search_history " +
                 "FROM search " +
-                "WHERE user_id = ? " +
-                "ORDER BY created_at DESC " +
-                "LIMIT 10";
+                "WHERE id = ? " +
+                "ORDER BY search_id DESC " +
+                "FETCH FIRST 10 ROWS ONLY";
 
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, userId);
+            ResultSet rs = ps.executeQuery();
 
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    SearchDto dto = new SearchDto();
-                    dto.setType("history");
-                    dto.setTargetId(rs.getString("search_id"));
-                    dto.setDisplayName(rs.getString("search_text"));
-                    dto.setDetail("検索履歴");
-                    list.add(dto);
-                }
+            while (rs.next()) {
+                list.add(new SearchSuggestionDto(
+                        "HISTORY",
+                        rs.getString("search_history"),
+                        ""));
             }
         }
 
         return list;
+    }
+
+    /**
+     * 検索履歴を登録する
+     *
+     * @param userId  ログインユーザーID
+     * @param keyword 検索ワード
+     */
+    public void insertHistory(String userId, String keyword) throws SQLException {
+
+        String sql = "INSERT INTO search(search_id, id, search_history) " +
+                "VALUES (LPAD(search_seq.NEXTVAL, 6, '0'), ?, ?)";
+
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, userId);
+            ps.setString(2, keyword);
+            ps.executeUpdate();
+        }
     }
 }
